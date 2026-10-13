@@ -19,7 +19,8 @@ enum AlertSettings {
     static var filters: SaleFilters {
         get {
             if let data = defaults.data(forKey: "alertFilters.v2"),
-               let saved = try? JSONDecoder().decode(SaleFilters.self, from: data) {
+               var saved = try? JSONDecoder().decode(SaleFilters.self, from: data) {
+                saved.store = .ounass
                 return saved
             }
             return SaleFilters(minDiscount: 50)
@@ -96,6 +97,7 @@ enum AlertChecker {
     /// plus price/stock changes on favorites.
     static func check(notify: Bool) async throws -> Result {
         var filters = AlertSettings.filters
+        filters.store = .ounass      // background checks use Ounass' API (newest first)
         filters.sort = .newest
         let baseline = !Tracker.isKnown(filters)
         var found: [Product] = []
@@ -127,7 +129,8 @@ enum AlertChecker {
         var notified = AlertSettings.stockNotified
         var changes: [FavoriteChange] = []
 
-        for index in favorites.indices.prefix(favoritesPerCheck) {
+        let ounassIndices = favorites.indices.filter { favorites[$0].store == .ounass }
+        for index in ounassIndices.prefix(favoritesPerCheck) {
             let fav = favorites[index]
             guard let url = fav.productURL,
                   let detail = try? await OunassAPI.fetchDetail(url),

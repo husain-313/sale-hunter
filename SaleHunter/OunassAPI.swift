@@ -43,8 +43,8 @@ enum OunassAPI {
         // Men's clothing or men's shoes only.
         let category = f.category == "shoes" ? "shoes" : "clothing"
         var path = "/api/v2/men/sale/" + category
-        if SaleFilters.types(for: category).contains(where: { $0.value == f.subcategory }) {
-            path += "/" + f.subcategory
+        if let type = f.itemType, type.isShoe == (category == "shoes") {
+            path += "/" + type.ounassSlug
         }
         return path
     }

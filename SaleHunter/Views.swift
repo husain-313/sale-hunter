@@ -19,7 +19,9 @@ struct SaleView: View {
                 return words.allSatisfy { hay.contains($0) }
             }
         }
-        if store.filters.sort == .discount { list.sort { $0.discount > $1.discount } }
+        if !store.filters.store.usesAPI || store.filters.sort == .discount {
+            list = store.filters.sort.sort(list)
+        }
         return list
     }
 
@@ -35,13 +37,28 @@ struct SaleView: View {
         )
     }
 
+    private var storeBinding: Binding<Store> {
+        Binding(
+            get: { store.filters.store },
+            set: { newValue in
+                guard newValue != store.filters.store else { return }
+                store.filters.store = newValue
+                if !SortOption.options(for: newValue).contains(store.filters.sort) {
+                    store.filters.sort = .featured
+                }
+                Task { await store.refresh() }
+            }
+        )
+    }
+
     private var sortBinding: Binding<SortOption> {
         Binding(
             get: { store.filters.sort },
             set: { newValue in
                 guard newValue != store.filters.sort else { return }
                 store.filters.sort = newValue
-                Task { await store.refresh() }
+                // Other stores sort the loaded items on the phone — no reload needed.
+                if store.filters.store.usesAPI { Task { await store.refresh() } }
             }
         )
     }
@@ -50,6 +67,7 @@ struct SaleView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 LazyVStack(spacing: 12) {
+                    StorePicker(selection: storeBinding)
                     Picker("Category", selection: categoryBinding) {
                         ForEach(SaleFilters.categories) { Text($0.label).tag($0.value) }
                     }
@@ -72,7 +90,7 @@ struct SaleView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Menu {
                         Picker("Sort", selection: sortBinding) {
-                            ForEach(SortOption.allCases) { Text($0.label).tag($0) }
+                            ForEach(SortOption.options(for: store.filters.store)) { Text($0.label).tag($0) }
                         }
                     } label: {
                         Image(systemName: "arrow.up.arrow.down.circle")
@@ -88,7 +106,7 @@ struct SaleView: View {
             }
             .navigationDestination(for: Product.self) { ProductDetailView(product: $0) }
             .sheet(isPresented: $showFilters) {
-                FilterSheet(title: "Filters", filters: store.filters) { newFilters in
+                FilterSheet(title: "Filters", filters: store.filters, localBrands: store.loadedBrands) { newFilters in
                     var updated = newFilters
                     updated.sort = store.filters.sort
                     store.filters = updated
@@ -104,7 +122,11 @@ struct SaleView: View {
     @ViewBuilder private var summary: some View {
         if store.total > 0 {
             HStack(spacing: 6) {
-                Text("\(store.total.formatted()) \(store.filters.category == "shoes" ? "shoes" : "clothing items")")
+                if store.filters.store.usesAPI {
+                    Text("\(store.total.formatted()) \(store.filters.category == "shoes" ? "shoes" : "clothing items")")
+                } else {
+                    Text("\(store.products.count) items · page \(store.pagesLoaded) of \(store.totalPages.formatted())")
+                }
                 if store.filters.sort != .featured {
                     Text("· \(store.filters.sort.label)")
                 }
@@ -221,13 +243,19 @@ struct ProductCard: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2, reservesSpace: true)
-                PriceRow(price: product.price, was: previous ?? product.was, small: true)
+                PriceRow(price: product.price, was: previous ?? product.was, small: true, approx: product.converted)
                     .padding(.top, 2)
                 if !product.sizes.isEmpty {
                     Text(product.sizes.joined(separator: " · "))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                }
+                if product.store != .ounass {
+                    Text(product.store.name.uppercased())
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Theme.gold)
+                        .padding(.top, 1)
                 }
             }
             .padding(10)
@@ -294,10 +322,11 @@ struct PriceRow: View {
     let price: Double
     let was: Double
     var small = false
+    var approx = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(Money.format(price))
+            Text(Money.format(price, approx: approx))
                 .font(small ? .subheadline.weight(.bold) : .title3.weight(.bold))
             if was > price {
                 Text(Money.format(was))
@@ -337,7 +366,8 @@ struct ProductDetailView: View {
                     Text(detail?.name ?? product.name)
                         .foregroundStyle(.secondary)
                     HStack(spacing: 10) {
-                        PriceRow(price: detail?.price ?? product.price, was: detail?.was ?? product.was)
+                        PriceRow(price: detail?.price ?? product.price, was: detail?.was ?? product.was,
+                                 approx: product.converted)
                         Badge(text: "-\(detail?.discount ?? product.discount)%", color: Theme.sale, textColor: .white)
                     }
                     .padding(.top, 4)
@@ -370,7 +400,7 @@ struct ProductDetailView: View {
                         Button {
                             openURL(url)
                         } label: {
-                            Label("Buy on Ounass", systemImage: "bag")
+                            Label("Buy on \(product.store.name)", systemImage: "bag")
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 6)
                         }
@@ -483,6 +513,15 @@ struct ProductDetailView: View {
     }
 
     private func load() async {
+        guard product.store == .ounass else {
+            detail = ProductDetail(brand: product.brand, name: product.name, price: product.price,
+                                   was: product.was, discount: product.discount,
+                                   images: product.imageURL.map { [$0] } ?? [],
+                                   sizes: product.sizes.map { SizeStock(code: $0, stock: 3, urgency: nil) },
+                                   description: "Full details, all photos and live stock are on \(product.store.name). Tap “Buy on \(product.store.name)” to open the item.",
+                                   colors: [])
+            return
+        }
         guard let url = currentURL ?? product.productURL else {
             errorMessage = "No product link."
             return
@@ -506,19 +545,22 @@ struct ProductDetailView: View {
 
 struct FilterSheet: View {
     let title: String
+    let localBrands: [String]
     let onApply: (SaleFilters) -> Void
     @State private var filters: SaleFilters
     @Environment(\.dismiss) private var dismiss
 
-    init(title: String, filters: SaleFilters, onApply: @escaping (SaleFilters) -> Void) {
+    init(title: String, filters: SaleFilters, localBrands: [String] = [],
+         onApply: @escaping (SaleFilters) -> Void) {
         self.title = title
+        self.localBrands = localBrands
         self.onApply = onApply
         _filters = State(initialValue: filters)
     }
 
     var body: some View {
         NavigationStack {
-            Form { FilterFields(filters: $filters) }
+            Form { FilterFields(filters: $filters, localBrands: localBrands) }
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -526,9 +568,11 @@ struct FilterSheet: View {
                         Button("Reset") {
                             let sort = filters.sort
                             let category = filters.category
+                            let shop = filters.store
                             filters = SaleFilters()
                             filters.sort = sort
                             filters.category = category
+                            filters.store = shop
                         }
                     }
                     ToolbarItem(placement: .confirmationAction) {
@@ -546,6 +590,8 @@ struct FilterSheet: View {
 /// Filter sections, usable inside any Form (Sale filters and Alerts).
 struct FilterFields: View {
     @Binding var filters: SaleFilters
+    /// Brands seen on the loaded pages (for stores without a brand list).
+    var localBrands: [String] = []
     @State private var brandOptions: [String] = SaleFilters.popularBrands
 
     /// Switching category clears the type, which belongs to the old category.
@@ -568,7 +614,7 @@ struct FilterFields: View {
             .pickerStyle(.segmented)
             Picker("Type", selection: $filters.subcategory) {
                 Text(filters.category == "shoes" ? "All shoes" : "All clothing").tag("")
-                ForEach(SaleFilters.types(for: filters.category)) { Text($0.label).tag($0.value) }
+                ForEach(ItemType.types(for: filters.category)) { Text($0.label).tag($0.rawValue) }
             }
         }
 
@@ -585,10 +631,12 @@ struct FilterFields: View {
                 }
             }
         }
-        .task(id: filters.category + "/" + filters.subcategory) { await loadBrands() }
+        .task(id: filters.store.rawValue + "/" + filters.category + "/" + filters.subcategory) { await loadBrands() }
 
-        Section("Colour") {
-            ColorChips(selected: $filters.colors)
+        if filters.store.usesAPI {
+            Section("Colour") {
+                ColorChips(selected: $filters.colors)
+            }
         }
 
         if filters.category == "shoes" {
@@ -620,7 +668,9 @@ struct FilterFields: View {
         } header: {
             Text("Price")
         } footer: {
-            Text("Tip: with a max price, sort by “Price: low to high” for the fastest results.")
+            Text(filters.store.usesAPI
+                 ? "Tip: with a max price, sort by “Price: low to high” for the fastest results."
+                 : "\(filters.store.name) filters are applied on your phone to the pages loaded so far. Converted prices are approximate.")
         }
     }
 
@@ -637,8 +687,13 @@ struct FilterFields: View {
     }
 
     private func loadBrands() async {
-        let live = (try? await OunassAPI.fetchBrands(category: filters.category,
+        let live: [String]
+        if filters.store.usesAPI {
+            live = (try? await OunassAPI.fetchBrands(category: filters.category,
                                                       subcategory: filters.subcategory)) ?? []
+        } else {
+            live = localBrands
+        }
         var seen = Set<String>()
         brandOptions = (live + SaleFilters.popularBrands + filters.brands)
             .filter { seen.insert($0.lowercased()).inserted }
@@ -829,7 +884,7 @@ struct AlertsView: View {
                     Toggle("Notify me about new deals", isOn: $enabled)
                     Toggle("Favorites: price drops & low stock", isOn: $favoritesAlerts)
                 } footer: {
-                    Text("Sale Hunter checks Ounass' newest sale items in the background every few hours and notifies you when they match the filters below. iOS decides the exact timing, so keep Background App Refresh on.")
+                    Text("Sale Hunter checks Ounass' newest sale items in the background every few hours and notifies you when they match the filters below. Favorite alerts cover Ounass items. iOS decides the exact timing, so keep Background App Refresh on.")
                 }
 
                 FilterFields(filters: $filters)
@@ -897,5 +952,41 @@ struct AlertsView: View {
         }
         lastCheck = AlertSettings.lastCheck
         checking = false
+    }
+}
+
+
+// MARK: - Store picker
+
+struct StorePicker: View {
+    @Binding var selection: Store
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Store.allCases) { shop in
+                        let on = shop == selection
+                        Button {
+                            selection = shop
+                        } label: {
+                            Text(shop.name)
+                                .font(.subheadline.weight(on ? .bold : .medium))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(on ? Theme.gold : Color.gray.opacity(0.18), in: Capsule())
+                                .foregroundStyle(on ? Color.black : Color.primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            Text(selection.blurb)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+        }
+        .padding(.top, 4)
     }
 }

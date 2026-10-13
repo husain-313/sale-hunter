@@ -94,7 +94,9 @@ final class SaleStore: ObservableObject {
     @Published private(set) var autoLoadPaused = false
     @Published var errorMessage: String?
 
+    @Published private(set) var totalPages = 0
     private var nextStart = 0
+    private var nextPage = 1
     private var generation = 0
     private var baselineSession = false
     private var emptyStreak = 0
@@ -111,7 +113,9 @@ final class SaleStore: ObservableObject {
     func refresh() async {
         generation += 1
         nextStart = 0
+        nextPage = 1
         total = 0
+        totalPages = 0
         products = []
         pagesLoaded = 0
         emptyStreak = 0
@@ -135,32 +139,55 @@ final class SaleStore: ObservableObject {
         await loadMore()
     }
 
+    /// Brands seen in the loaded items (used by the brand filter for non-Ounass stores).
+    var loadedBrands: [String] {
+        var seen = Set<String>()
+        return products.map(\.brand).filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+    }
+
     func loadMore() async {
         guard !isLoading, canLoadMore else { return }
         isLoading = true
         let gen = generation
         let current = filters
         do {
-            let page = try await OunassAPI.fetch(current, start: nextStart)
-            guard gen == generation else { return }
-            Tracker.record(page.products, baseline: baselineSession)
+            let pageItems: [Product]
+            var typeHandled = true
+            if current.store.usesAPI {
+                let page = try await OunassAPI.fetch(current, start: nextStart)
+                guard gen == generation else { return }
+                pageItems = page.products
+                total = page.total
+                nextStart += OunassAPI.pageSize
+                canLoadMore = page.hasMore
+            } else {
+                let page = try await WebStores.fetch(current, page: nextPage)
+                guard gen == generation else { return }
+                pageItems = page.products
+                typeHandled = page.typeHandledByStore
+                totalPages = page.pages
+                nextPage = page.page + 1
+                canLoadMore = page.hasMore
+            }
+
+            Tracker.record(pageItems, baseline: baselineSession)
             Tracker.markKnown(current)
 
             let existing = Set(products.map(\.id))
-            let visible = page.products.filter { current.matchesPrice($0) && !existing.contains($0.id) }
+            let visible = pageItems.filter {
+                !existing.contains($0.id) && current.matchesLocally($0, typeHandledByStore: typeHandled)
+            }
             products += visible
-            total = page.total
-            nextStart += OunassAPI.pageSize
             pagesLoaded += 1
-            canLoadMore = page.hasMore
+            if !current.store.usesAPI { total = products.count }
 
-            // With a price sort, stop once we are past the price range.
-            if let last = page.products.last {
+            // With an Ounass price sort, stop once we are past the price range.
+            if current.store.usesAPI, let last = pageItems.last {
                 if current.sort == .priceLow, let max = current.maxPrice, last.price > max { canLoadMore = false }
                 if current.sort == .priceHigh, let min = current.minPrice, last.price < min { canLoadMore = false }
             }
             emptyStreak = visible.isEmpty ? emptyStreak + 1 : 0
-            autoLoadPaused = canLoadMore && emptyStreak >= 6
+            autoLoadPaused = canLoadMore && emptyStreak >= (current.store.usesAPI ? 6 : 3)
         } catch {
             guard gen == generation else { return }
             errorMessage = error.localizedDescription
