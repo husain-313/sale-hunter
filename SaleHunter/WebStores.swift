@@ -257,8 +257,8 @@ enum WebStores {
               const href = a ? a.getAttribute('href').split('?')[0] : '';
               let name = q('.js-plp-name');
               // If the store answers in Arabic, build an English name from the product link.
-              if (/[\u0600-\u06FF]/.test(name) || !name) {
-                const slug = (href.split('/dp/')[0] || '').replace(/^\//, '');
+              if (/[\\u0600-\\u06FF]/.test(name) || !name) {
+                const slug = (href.split('/dp/')[0] || '').replace(/^\\//, '');
                 name = slug.split('-').filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
               }
               return { id: t.id, brand: q('.js-plp-brand'), name,
