@@ -2,7 +2,7 @@ import Foundation
 import BackgroundTasks
 import UserNotifications
 
-/// Settings for background deal alerts, stored on the phone.
+/// Settings for background alerts, stored on the phone.
 enum AlertSettings {
     private static let defaults = UserDefaults.standard
 
@@ -11,9 +11,14 @@ enum AlertSettings {
         set { defaults.set(newValue, forKey: "alertsEnabled") }
     }
 
+    static var favoritesAlerts: Bool {
+        get { defaults.object(forKey: "favoritesAlerts") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "favoritesAlerts") }
+    }
+
     static var filters: SaleFilters {
         get {
-            if let data = defaults.data(forKey: "alertFilters"),
+            if let data = defaults.data(forKey: "alertFilters.v2"),
                let saved = try? JSONDecoder().decode(SaleFilters.self, from: data) {
                 return saved
             }
@@ -21,7 +26,7 @@ enum AlertSettings {
         }
         set {
             if let data = try? JSONEncoder().encode(newValue) {
-                defaults.set(data, forKey: "alertFilters")
+                defaults.set(data, forKey: "alertFilters.v2")
             }
         }
     }
@@ -31,21 +36,42 @@ enum AlertSettings {
         set { defaults.set(newValue, forKey: "lastCheck") }
     }
 
-    static var lastFound: Int {
-        get { defaults.integer(forKey: "lastFound") }
-        set { defaults.set(newValue, forKey: "lastFound") }
+    /// Stock warnings already sent ("<id>|low" / "<id>|out"), so each is sent once.
+    static var stockNotified: Set<String> {
+        get { Set(defaults.stringArray(forKey: "stockNotified") ?? []) }
+        set { defaults.set(Array(newValue), forKey: "stockNotified") }
+    }
+}
+
+struct FavoriteChange {
+    enum Kind { case priceDrop(old: Double), lowStock, soldOut }
+    let product: Product
+    let kind: Kind
+
+    var line: String {
+        switch kind {
+        case .priceDrop(let old):
+            return "\(product.brand): \(Money.format(old)) → \(Money.format(product.price))"
+        case .lowStock:
+            return "\(product.brand) \(product.name): almost sold out"
+        case .soldOut:
+            return "\(product.brand) \(product.name): sold out"
+        }
     }
 }
 
 enum AlertChecker {
     static let taskID = "com.husain313.salehunter.refresh"
-    /// Pages checked per run (24 items each). Narrow alert filters = better coverage.
-    static let pagesPerCheck = 4
+    /// Pages of newest items checked per run (24 items each).
+    static let pagesPerCheck = 3
+    /// Favorites checked per run.
+    static let favoritesPerCheck = 10
 
     struct Result {
         let found: [Product]
         let checked: Int
         let baseline: Bool
+        let favoriteChanges: [FavoriteChange]
     }
 
     static func scheduleNext() {
@@ -66,29 +92,85 @@ enum AlertChecker {
             .requestAuthorization(options: [.alert, .sound, .badge])) ?? false
     }
 
-    /// Looks at the first few pages for the alert filters and reports items never seen before.
+    /// New items (sorted by Ounass' newest first) matching the alert filters,
+    /// plus price/stock changes on favorites.
     static func check(notify: Bool) async throws -> Result {
-        let filters = AlertSettings.filters
+        var filters = AlertSettings.filters
+        filters.sort = .newest
         let baseline = !Tracker.isKnown(filters)
         var found: [Product] = []
         var checked = 0
         var start = 0
         for index in 0..<pagesPerCheck {
-            if index > 0 { try await Task.sleep(nanoseconds: 1_200_000_000) }
+            if index > 0 { try await Task.sleep(nanoseconds: 700_000_000) }
             let page = try await OunassAPI.fetch(filters, start: start)
             checked += page.products.count
-            found += Tracker.record(page.products, baseline: baseline)
+            found += Tracker.record(page.products, baseline: baseline).filter { filters.matchesPrice($0) }
             if !page.hasMore { break }
             start += OunassAPI.pageSize
         }
         Tracker.markKnown(filters)
+
+        let changes = AlertSettings.favoritesAlerts ? await checkFavorites() : []
         AlertSettings.lastCheck = Date()
-        AlertSettings.lastFound = found.count
-        if notify && !found.isEmpty { await sendNotification(found) }
-        return Result(found: found, checked: checked, baseline: baseline)
+
+        if notify {
+            if !found.isEmpty { await sendDealsNotification(found) }
+            if !changes.isEmpty { await sendFavoritesNotification(changes) }
+        }
+        return Result(found: found, checked: checked, baseline: baseline, favoriteChanges: changes)
     }
 
-    static func sendNotification(_ items: [Product]) async {
+    static func checkFavorites() async -> [FavoriteChange] {
+        var favorites = FavoritesStore.loadSaved()
+        guard !favorites.isEmpty else { return [] }
+        var notified = AlertSettings.stockNotified
+        var changes: [FavoriteChange] = []
+
+        for index in favorites.indices.prefix(favoritesPerCheck) {
+            let fav = favorites[index]
+            guard let url = fav.productURL,
+                  let detail = try? await OunassAPI.fetchDetail(url),
+                  detail.price > 0 else { continue }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+
+            let updated = fav.updated(price: detail.price, was: detail.was,
+                                      discount: detail.discount, sizes: detail.inStockSizes)
+            if detail.price < fav.price - 0.001 {
+                changes.append(FavoriteChange(product: updated, kind: .priceDrop(old: fav.price)))
+            }
+            if !detail.sizes.isEmpty {
+                let stock = detail.totalStock
+                if stock == 0 {
+                    if !notified.contains(fav.id + "|out") {
+                        changes.append(FavoriteChange(product: updated, kind: .soldOut))
+                        notified.insert(fav.id + "|out")
+                    }
+                } else if stock <= 2 {
+                    if !notified.contains(fav.id + "|low") {
+                        changes.append(FavoriteChange(product: updated, kind: .lowStock))
+                        notified.insert(fav.id + "|low")
+                    }
+                } else {
+                    notified.remove(fav.id + "|low")
+                    notified.remove(fav.id + "|out")
+                }
+            }
+            Tracker.record([updated], baseline: true)
+            favorites[index] = updated
+        }
+
+        // Merge into the latest saved list (the user may have changed it meanwhile).
+        var latest = FavoritesStore.loadSaved()
+        for item in favorites {
+            if let i = latest.firstIndex(where: { $0.id == item.id }) { latest[i] = item }
+        }
+        FavoritesStore.save(latest)
+        AlertSettings.stockNotified = notified
+        return changes
+    }
+
+    static func sendDealsNotification(_ items: [Product]) async {
         let content = UNMutableNotificationContent()
         content.title = items.count == 1 ? "New deal on Ounass" : "\(items.count) new deals on Ounass"
         content.body = items
@@ -97,6 +179,19 @@ enum AlertChecker {
             .map { "\($0.brand) – \(Money.format($0.price)) (-\($0.discount)%)" }
             .joined(separator: "\n")
         content.sound = .default
+        await deliver(content)
+    }
+
+    static func sendFavoritesNotification(_ changes: [FavoriteChange]) async {
+        let drops = changes.filter { if case .priceDrop = $0.kind { return true } else { return false } }
+        let content = UNMutableNotificationContent()
+        content.title = drops.isEmpty ? "Update on your favorites" : "Price drop on your favorites"
+        content.body = changes.prefix(4).map(\.line).joined(separator: "\n")
+        content.sound = .default
+        await deliver(content)
+    }
+
+    private static func deliver(_ content: UNNotificationContent) async {
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         try? await UNUserNotificationCenter.current().add(request)
     }

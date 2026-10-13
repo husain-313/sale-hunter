@@ -81,7 +81,7 @@ final class SaleStore: ObservableObject {
     @Published var filters: SaleFilters {
         didSet {
             if let data = try? JSONEncoder().encode(filters) {
-                UserDefaults.standard.set(data, forKey: "saleFilters")
+                UserDefaults.standard.set(data, forKey: "saleFilters.v2")
             }
         }
     }
@@ -89,14 +89,18 @@ final class SaleStore: ObservableObject {
     @Published private(set) var total = 0
     @Published private(set) var isLoading = false
     @Published private(set) var canLoadMore = true
+    @Published private(set) var pagesLoaded = 0
+    /// Set when a price range hides many pages in a row — then the user taps to keep going.
+    @Published private(set) var autoLoadPaused = false
     @Published var errorMessage: String?
 
     private var nextStart = 0
     private var generation = 0
     private var baselineSession = false
+    private var emptyStreak = 0
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: "saleFilters"),
+        if let data = UserDefaults.standard.data(forKey: "saleFilters.v2"),
            let saved = try? JSONDecoder().decode(SaleFilters.self, from: data) {
             filters = saved
         } else {
@@ -109,6 +113,9 @@ final class SaleStore: ObservableObject {
         nextStart = 0
         total = 0
         products = []
+        pagesLoaded = 0
+        emptyStreak = 0
+        autoLoadPaused = false
         errorMessage = nil
         canLoadMore = true
         isLoading = false
@@ -122,6 +129,12 @@ final class SaleStore: ObservableObject {
         await loadMore()
     }
 
+    func resumeLoading() async {
+        emptyStreak = 0
+        autoLoadPaused = false
+        await loadMore()
+    }
+
     func loadMore() async {
         guard !isLoading, canLoadMore else { return }
         isLoading = true
@@ -132,11 +145,22 @@ final class SaleStore: ObservableObject {
             guard gen == generation else { return }
             Tracker.record(page.products, baseline: baselineSession)
             Tracker.markKnown(current)
+
             let existing = Set(products.map(\.id))
-            products += page.products.filter { !existing.contains($0.id) }
+            let visible = page.products.filter { current.matchesPrice($0) && !existing.contains($0.id) }
+            products += visible
             total = page.total
             nextStart += OunassAPI.pageSize
+            pagesLoaded += 1
             canLoadMore = page.hasMore
+
+            // With a price sort, stop once we are past the price range.
+            if let last = page.products.last {
+                if current.sort == .priceLow, let max = current.maxPrice, last.price > max { canLoadMore = false }
+                if current.sort == .priceHigh, let min = current.minPrice, last.price < min { canLoadMore = false }
+            }
+            emptyStreak = visible.isEmpty ? emptyStreak + 1 : 0
+            autoLoadPaused = canLoadMore && emptyStreak >= 6
         } catch {
             guard gen == generation else { return }
             errorMessage = error.localizedDescription
@@ -150,13 +174,27 @@ final class SaleStore: ObservableObject {
 @MainActor
 final class FavoritesStore: ObservableObject {
     @Published private(set) var items: [Product] = []
-    private let key = "favorites"
+    nonisolated static let key = "favorites"
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: key),
-           let saved = try? JSONDecoder().decode([Product].self, from: data) {
-            items = saved
+        items = Self.loadSaved()
+    }
+
+    nonisolated static func loadSaved() -> [Product] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let saved = try? JSONDecoder().decode([Product].self, from: data) else { return [] }
+        return saved
+    }
+
+    nonisolated static func save(_ items: [Product]) {
+        if let data = try? JSONEncoder().encode(items) {
+            UserDefaults.standard.set(data, forKey: key)
         }
+    }
+
+    /// Picks up price/stock updates made by the background check.
+    func reload() {
+        items = Self.loadSaved()
     }
 
     func contains(_ product: Product) -> Bool {
@@ -164,13 +202,18 @@ final class FavoritesStore: ObservableObject {
     }
 
     func toggle(_ product: Product) {
+        items = Self.loadSaved()
         if let i = items.firstIndex(where: { $0.id == product.id }) {
             items.remove(at: i)
         } else {
             items.insert(product, at: 0)
         }
-        if let data = try? JSONEncoder().encode(items) {
-            UserDefaults.standard.set(data, forKey: key)
-        }
+        Self.save(items)
+    }
+
+    func update(_ product: Product) {
+        guard let i = items.firstIndex(where: { $0.id == product.id }) else { return }
+        items[i] = product
+        Self.save(items)
     }
 }
