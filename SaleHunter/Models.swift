@@ -70,7 +70,7 @@ struct ColorOption: Identifiable, Hashable {
 /// Filters. Everything except the price range is applied by Ounass itself.
 struct SaleFilters: Codable, Equatable {
     var minDiscount: Int = 0
-    var category: String = ""
+    var category: String = "clothing"   // "clothing" or "shoes"
     var subcategory: String = ""
     var brands: [String] = []
     var clothingSizes: [String] = []
@@ -91,7 +91,8 @@ struct SaleFilters: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         minDiscount = (try? c.decode(Int.self, forKey: .minDiscount)) ?? 0
-        category = (try? c.decode(String.self, forKey: .category)) ?? ""
+        let savedCategory = (try? c.decode(String.self, forKey: .category)) ?? ""
+        category = savedCategory == "shoes" ? "shoes" : "clothing"
         subcategory = (try? c.decode(String.self, forKey: .subcategory)) ?? ""
         brands = (try? c.decode([String].self, forKey: .brands)) ?? []
         clothingSizes = (try? c.decode([String].self, forKey: .clothingSizes)) ?? []
@@ -103,10 +104,13 @@ struct SaleFilters: Codable, Equatable {
     }
 
     var activeCount: Int {
-        [minDiscount > 0, !subcategory.isEmpty, !brands.isEmpty, !clothingSizes.isEmpty,
+        [minDiscount > 0, !subcategory.isEmpty, !brands.isEmpty, !relevantSizes.isEmpty,
          !colors.isEmpty, minPrice != nil || maxPrice != nil]
             .filter { $0 }.count
     }
+
+    /// Sizes that apply to the current category.
+    var relevantSizes: [String] { category == "shoes" ? shoeSizes : clothingSizes }
 
     var hasPriceRange: Bool { minPrice != nil || maxPrice != nil }
 
@@ -130,6 +134,26 @@ struct SaleFilters: Codable, Equatable {
     // MARK: Static option lists (taken from Ounass Bahrain's own filters)
 
     static let discountSteps = [20, 30, 40, 50, 60, 70, 80]
+
+    static let categories: [NamedOption] = [
+        .init(value: "clothing", label: "Clothing"),
+        .init(value: "shoes", label: "Shoes"),
+    ]
+
+    static func types(for category: String) -> [NamedOption] {
+        category == "shoes" ? shoeTypes : clothingTypes
+    }
+
+    static let shoeTypes: [NamedOption] = [
+        .init(value: "sneakers", label: "Sneakers"),
+        .init(value: "loafers", label: "Loafers"),
+        .init(value: "sandals", label: "Sandals"),
+        .init(value: "slippers", label: "Slippers"),
+        .init(value: "formal-shoes", label: "Formal Shoes"),
+        .init(value: "lace-ups", label: "Lace Ups"),
+        .init(value: "boots", label: "Boots"),
+        .init(value: "espadrilles", label: "Espadrilles"),
+    ]
 
     static let clothingTypes: [NamedOption] = [
         .init(value: "t-shirts", label: "T-Shirts"),

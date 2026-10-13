@@ -40,9 +40,10 @@ enum OunassAPI {
     }
 
     static func listPath(_ f: SaleFilters) -> String {
-        // Men's clothing only.
-        var path = "/api/v2/men/sale/clothing"
-        if SaleFilters.clothingTypes.contains(where: { $0.value == f.subcategory }) {
+        // Men's clothing or men's shoes only.
+        let category = f.category == "shoes" ? "shoes" : "clothing"
+        var path = "/api/v2/men/sale/" + category
+        if SaleFilters.types(for: category).contains(where: { $0.value == f.subcategory }) {
             path += "/" + f.subcategory
         }
         return path
@@ -57,7 +58,11 @@ enum OunassAPI {
             }
         }
         for b in f.brands { params.append(("designerCategoryName[]", b)) }
-        for s in f.clothingSizes { params.append(("rtwSizeCode[]", s)) }
+        if f.category == "shoes" {
+            for s in f.shoeSizes { params.append(("shoeSizeCode[]", s)) }
+        } else {
+            for s in f.clothingSizes { params.append(("rtwSizeCode[]", s)) }
+        }
         for c in f.colors { params.append(("colorFacet[]", c)) }
         let query = params.map { enc($0.0) + "=" + enc($0.1) }.joined(separator: "&")
         return URL(string: base + listPath(f) + "?" + query)
@@ -91,8 +96,9 @@ enum OunassAPI {
     }
 
     /// Brand names available for a category, straight from Ounass' filter list.
-    static func fetchBrands(subcategory: String) async throws -> [String] {
+    static func fetchBrands(category: String, subcategory: String) async throws -> [String] {
         var f = SaleFilters()
+        f.category = category
         f.subcategory = subcategory
         guard let url = url(for: f, start: 0) else { return [] }
         let decoded = try JSONDecoder().decode(FacetResponse.self, from: try await get(url))

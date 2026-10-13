@@ -23,6 +23,18 @@ struct SaleView: View {
         return list
     }
 
+    private var categoryBinding: Binding<String> {
+        Binding(
+            get: { store.filters.category },
+            set: { newValue in
+                guard newValue != store.filters.category else { return }
+                store.filters.category = newValue
+                store.filters.subcategory = ""
+                Task { await store.refresh() }
+            }
+        )
+    }
+
     private var sortBinding: Binding<SortOption> {
         Binding(
             get: { store.filters.sort },
@@ -38,6 +50,11 @@ struct SaleView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 LazyVStack(spacing: 12) {
+                    Picker("Category", selection: categoryBinding) {
+                        ForEach(SaleFilters.categories) { Text($0.label).tag($0.value) }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
                     summary
                     LazyVGrid(columns: gridColumns, spacing: 12) {
                         ForEach(shown) { product in
@@ -87,7 +104,7 @@ struct SaleView: View {
     @ViewBuilder private var summary: some View {
         if store.total > 0 {
             HStack(spacing: 6) {
-                Text("\(store.total.formatted()) clothing items")
+                Text("\(store.total.formatted()) \(store.filters.category == "shoes" ? "shoes" : "clothing items")")
                 if store.filters.sort != .featured {
                     Text("· \(store.filters.sort.label)")
                 }
@@ -508,8 +525,10 @@ struct FilterSheet: View {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Reset") {
                             let sort = filters.sort
+                            let category = filters.category
                             filters = SaleFilters()
                             filters.sort = sort
+                            filters.category = category
                         }
                     }
                     ToolbarItem(placement: .confirmationAction) {
@@ -529,11 +548,27 @@ struct FilterFields: View {
     @Binding var filters: SaleFilters
     @State private var brandOptions: [String] = SaleFilters.popularBrands
 
+    /// Switching category clears the type, which belongs to the old category.
+    private var categoryBinding: Binding<String> {
+        Binding(
+            get: { filters.category },
+            set: { newValue in
+                guard newValue != filters.category else { return }
+                filters.category = newValue
+                filters.subcategory = ""
+            }
+        )
+    }
+
     var body: some View {
-        Section("Type") {
-            Picker("Clothing type", selection: $filters.subcategory) {
-                Text("All clothing").tag("")
-                ForEach(SaleFilters.clothingTypes) { Text($0.label).tag($0.value) }
+        Section("Category") {
+            Picker("Category", selection: categoryBinding) {
+                ForEach(SaleFilters.categories) { Text($0.label).tag($0.value) }
+            }
+            .pickerStyle(.segmented)
+            Picker("Type", selection: $filters.subcategory) {
+                Text(filters.category == "shoes" ? "All shoes" : "All clothing").tag("")
+                ForEach(SaleFilters.types(for: filters.category)) { Text($0.label).tag($0.value) }
             }
         }
 
@@ -550,14 +585,20 @@ struct FilterFields: View {
                 }
             }
         }
-        .task(id: filters.subcategory) { await loadBrands() }
+        .task(id: filters.category + "/" + filters.subcategory) { await loadBrands() }
 
         Section("Colour") {
             ColorChips(selected: $filters.colors)
         }
 
-        Section("Size") {
-            ChipGrid(options: SaleFilters.clothingSizeOptions, selected: $filters.clothingSizes)
+        if filters.category == "shoes" {
+            Section("Shoe size (EU)") {
+                ChipGrid(options: SaleFilters.shoeSizeOptions, selected: $filters.shoeSizes)
+            }
+        } else {
+            Section("Clothing size") {
+                ChipGrid(options: SaleFilters.clothingSizeOptions, selected: $filters.clothingSizes)
+            }
         }
 
         Section("Discount") {
@@ -596,7 +637,8 @@ struct FilterFields: View {
     }
 
     private func loadBrands() async {
-        let live = (try? await OunassAPI.fetchBrands(subcategory: filters.subcategory)) ?? []
+        let live = (try? await OunassAPI.fetchBrands(category: filters.category,
+                                                      subcategory: filters.subcategory)) ?? []
         var seen = Set<String>()
         brandOptions = (live + SaleFilters.popularBrands + filters.brands)
             .filter { seen.insert($0.lowercased()).inserted }
