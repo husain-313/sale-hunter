@@ -1,33 +1,29 @@
-# صيّاد التخفيضات · Sale Hunter
+# Sale Hunter
 
-تطبيق آيفون (ويب) يتابع تخفيضات **أُناس البحرين** للرجال، يتحدث تلقائيًا كل 6 ساعات، ويقدر يرسل لك إشعار لما تنزل قطع جديدة أو ينزل سعر قطعة.
+An iPhone app that tracks **Ounass Bahrain** men's sale items.
 
-**التطبيق:** https://husain-313.github.io/sale-hunter/
+- Browse every men's sale item with filters (discount, category, brand, clothing and shoe size) and sorting
+- **NEW** and **PRICE DROP** badges for items you haven't seen before or that got cheaper
+- Favorites saved on your phone
+- Background alerts: a notification when new items match your alert filters
+- Tap any item to open it on Ounass
 
-## كيف يشتغل
-1. **GitHub Actions** يشغّل `scraper/fetch_sales.py` كل 6 ساعات، يسحب كل قطع التخفيضات من أُناس البحرين، ويحفظها في `docs/data/sales.json`.
-2. السكربت يتذكر متى ظهرت كل قطعة لأول مرة، ويكشف إذا نزل سعرها.
-3. **GitHub Pages** ينشر مجلد `docs/` كتطبيق ويب تقدر تضيفه للشاشة الرئيسية في الآيفون.
+The app talks to Ounass directly from your phone — there is no server.
 
-## تثبيته على الآيفون
-افتح الرابط في **Safari** ← زر المشاركة ← **إضافة إلى الشاشة الرئيسية**.
+## Install
 
-## الإشعارات (اختياري)
-1. نزّل تطبيق **ntfy** من App Store.
-2. اشترك في اسم موضوع سري وصعب التخمين، مثل `sale-hunter-husain-8x2k`.
-3. في GitHub: Settings ← Secrets and variables ← Actions ← New repository secret، الاسم `NTFY_TOPIC` والقيمة اسم الموضوع.
+1. Download the latest unsigned IPA on your iPhone:
+   **https://github.com/husain-313/sale-hunter/releases/latest/download/SaleHunter.ipa**
+2. Open it in your signing app and install.
 
-اللي ينبّهك عليه تتحكم فيه من `config.json` تحت `watch`:
+Every push to `main` that touches the app builds a new IPA automatically (GitHub Actions → **Build iOS app**). You can also run it manually from the Actions tab.
 
-| الإعداد | المعنى |
+## Project layout
+
+| Path | What it is |
 |---|---|
-| `min_discount` | أقل نسبة خصم (مثلًا 50) |
-| `max_price` | أعلى سعر بالدينار (`null` = بدون حد) |
-| `brands` | ماركات محددة، مثل `["Nike", "Fear of God Essentials"]` |
-| `categories` | `Clothing` / `Shoes` / `Accessories` … |
-| `sizes` / `shoe_sizes` | مثل `["M","L"]` و `["42","43"]` |
+| `SaleHunter/` | SwiftUI source code and assets |
+| `project.yml` | XcodeGen spec (the `.xcodeproj` is generated in CI) |
+| `.github/workflows/build-ios.yml` | Builds the unsigned IPA and publishes it as a release |
 
-القائمة الفاضية `[]` تعني الكل.
-
-## تشغيل يدوي
-Actions ← **Update sales** ← **Run workflow**.
+Bundle ID: `com.husain313.salehunter` · iOS 16+
