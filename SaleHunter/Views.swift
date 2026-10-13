@@ -87,7 +87,7 @@ struct SaleView: View {
     @ViewBuilder private var summary: some View {
         if store.total > 0 {
             HStack(spacing: 6) {
-                Text("\(store.total.formatted()) items")
+                Text("\(store.total.formatted()) clothing items")
                 if store.filters.sort != .featured {
                     Text("· \(store.filters.sort.label)")
                 }
@@ -529,21 +529,13 @@ struct FilterFields: View {
     @Binding var filters: SaleFilters
     @State private var brandOptions: [String] = SaleFilters.popularBrands
 
-    private var types: [NamedOption] { SaleFilters.types[filters.category] ?? [] }
-
     var body: some View {
-        Section("Category") {
-            Picker("Category", selection: $filters.category) {
-                ForEach(SaleFilters.categories) { Text($0.label).tag($0.value) }
-            }
-            if !types.isEmpty {
-                Picker("Type", selection: $filters.subcategory) {
-                    Text("All types").tag("")
-                    ForEach(types) { Text($0.label).tag($0.value) }
-                }
+        Section("Type") {
+            Picker("Clothing type", selection: $filters.subcategory) {
+                Text("All clothing").tag("")
+                ForEach(SaleFilters.clothingTypes) { Text($0.label).tag($0.value) }
             }
         }
-        .onChange(of: filters.category) { _ in filters.subcategory = "" }
 
         Section {
             NavigationLink {
@@ -558,18 +550,14 @@ struct FilterFields: View {
                 }
             }
         }
-        .task(id: filters.category + "/" + filters.subcategory) { await loadBrands() }
+        .task(id: filters.subcategory) { await loadBrands() }
 
         Section("Colour") {
             ColorChips(selected: $filters.colors)
         }
 
-        Section("Clothing size") {
+        Section("Size") {
             ChipGrid(options: SaleFilters.clothingSizeOptions, selected: $filters.clothingSizes)
-        }
-
-        Section("Shoe size (EU)") {
-            ChipGrid(options: SaleFilters.shoeSizeOptions, selected: $filters.shoeSizes)
         }
 
         Section("Discount") {
@@ -608,8 +596,7 @@ struct FilterFields: View {
     }
 
     private func loadBrands() async {
-        let live = (try? await OunassAPI.fetchBrands(category: filters.category,
-                                                      subcategory: filters.subcategory)) ?? []
+        let live = (try? await OunassAPI.fetchBrands(subcategory: filters.subcategory)) ?? []
         var seen = Set<String>()
         brandOptions = (live + SaleFilters.popularBrands + filters.brands)
             .filter { seen.insert($0.lowercased()).inserted }

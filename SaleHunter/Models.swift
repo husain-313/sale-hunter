@@ -103,8 +103,8 @@ struct SaleFilters: Codable, Equatable {
     }
 
     var activeCount: Int {
-        [minDiscount > 0, !category.isEmpty, !brands.isEmpty, !clothingSizes.isEmpty,
-         !shoeSizes.isEmpty, !colors.isEmpty, minPrice != nil || maxPrice != nil]
+        [minDiscount > 0, !subcategory.isEmpty, !brands.isEmpty, !clothingSizes.isEmpty,
+         !colors.isEmpty, minPrice != nil || maxPrice != nil]
             .filter { $0 }.count
     }
 
@@ -131,40 +131,19 @@ struct SaleFilters: Codable, Equatable {
 
     static let discountSteps = [20, 30, 40, 50, 60, 70, 80]
 
-    static let categories: [NamedOption] = [
-        .init(value: "", label: "All categories"),
-        .init(value: "clothing", label: "Clothing"),
-        .init(value: "shoes", label: "Shoes"),
-        .init(value: "accessories", label: "Accessories"),
-        .init(value: "bags", label: "Bags"),
-        .init(value: "grooming", label: "Grooming"),
-    ]
-
-    static let types: [String: [NamedOption]] = [
-        "clothing": [
-            .init(value: "t-shirts", label: "T-Shirts"),
-            .init(value: "casual-shirts", label: "Casual Shirts"),
-            .init(value: "polo-shirts", label: "Polo Shirts"),
-            .init(value: "sweats", label: "Sweats"),
-            .init(value: "knitwear", label: "Knitwear"),
-            .init(value: "coats-jackets", label: "Coats & Jackets"),
-            .init(value: "blazer", label: "Blazers"),
-            .init(value: "pants", label: "Pants"),
-            .init(value: "jeans", label: "Jeans"),
-            .init(value: "shorts", label: "Shorts"),
-            .init(value: "swimwear", label: "Swimwear"),
-            .init(value: "underwear", label: "Underwear"),
-        ],
-        "shoes": [
-            .init(value: "sneakers", label: "Sneakers"),
-            .init(value: "loafers", label: "Loafers"),
-            .init(value: "sandals", label: "Sandals"),
-            .init(value: "slippers", label: "Slippers"),
-            .init(value: "formal-shoes", label: "Formal Shoes"),
-            .init(value: "lace-ups", label: "Lace Ups"),
-            .init(value: "boots", label: "Boots"),
-            .init(value: "espadrilles", label: "Espadrilles"),
-        ],
+    static let clothingTypes: [NamedOption] = [
+        .init(value: "t-shirts", label: "T-Shirts"),
+        .init(value: "casual-shirts", label: "Casual Shirts"),
+        .init(value: "polo-shirts", label: "Polo Shirts"),
+        .init(value: "sweats", label: "Sweats"),
+        .init(value: "knitwear", label: "Knitwear"),
+        .init(value: "coats-jackets", label: "Coats & Jackets"),
+        .init(value: "blazer", label: "Blazers"),
+        .init(value: "pants", label: "Pants"),
+        .init(value: "jeans", label: "Jeans"),
+        .init(value: "shorts", label: "Shorts"),
+        .init(value: "swimwear", label: "Swimwear"),
+        .init(value: "underwear", label: "Underwear"),
     ]
 
     static let colorOptions: [ColorOption] = [
