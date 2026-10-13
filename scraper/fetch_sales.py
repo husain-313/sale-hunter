@@ -57,11 +57,21 @@ def get_json(url, retries=4):
             req = urllib.request.Request(url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=30) as r:
                 return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read()[:200].decode("utf-8", "replace").replace("\n", " ")
+            last = f"HTTP {e.code} {e.reason} | {body}"
+            print(f"::warning::{url} -> {last}")
+            if e.code in (401, 403, 404):
+                break
+            time.sleep(2 ** attempt + random.random())
+            continue
         except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as e:
             last = e
+            print(f"::warning::{url} -> {e}")
             wait = 2 ** attempt + random.random()
             print(f"  retry {attempt + 1}/{retries} after error: {e} (sleep {wait:.1f}s)")
             time.sleep(wait)
+    print(f"::error::failed to fetch {url}: {last}")
     raise RuntimeError(f"failed to fetch {url}: {last}")
 
 
@@ -177,7 +187,7 @@ def main():
 
     # Safety: don't wipe good data with a broken/partial scrape.
     if expected and len(all_items) < expected * 0.5:
-        print(f"Only got {len(all_items)} of {expected} — keeping previous data.")
+        print(f"::error::Only got {len(all_items)} of {expected} — keeping previous data.")
         sys.exit(1)
 
     seen, items, new_items, drops = set(), [], [], []
