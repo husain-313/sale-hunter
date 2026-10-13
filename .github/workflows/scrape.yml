@@ -1,0 +1,43 @@
+name: Update sales
+
+on:
+  schedule:
+    # every 6 hours (UTC) — 3am, 9am, 3pm, 9pm Bahrain time
+    - cron: "17 0,6,12,18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch Ounass Bahrain sales
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python scraper/fetch_sales.py
+
+      - name: Commit data
+        run: |
+          git config user.name "sale-hunter-bot"
+          git config user.email "sale-hunter-bot@users.noreply.github.com"
+          git add docs/data/sales.json
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Update sales data"
+            git pull --rebase origin ${{ github.ref_name }}
+            git push
+          fi
